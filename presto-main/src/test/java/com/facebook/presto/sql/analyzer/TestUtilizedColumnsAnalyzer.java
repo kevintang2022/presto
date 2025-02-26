@@ -519,6 +519,29 @@ public class TestUtilizedColumnsAnalyzer
                 ImmutableMap.of(QualifiedObjectName.valueOf("tpch.s1.t1"), ImmutableSet.of("a")));
     }
 
+
+
+
+
+    public void testInvokerView()
+    {
+        @Language("SQL") String query = "SELECT v6.a, v6.c, v7.y FROM (select a,b,c from t1) v6 left join (select x,y,z from t13) v7 on v7.y = v6.c";
+
+        transaction(transactionManager, accessControl)
+                .singleStatement()
+                .readUncommitted()
+                .readOnly()
+                .execute(CLIENT_SESSION, session -> {
+                    Analyzer analyzer = createAnalyzer(session, metadata, WarningCollector.NOOP);
+                    Statement statement = SQL_PARSER.createStatement(query);
+                    Analysis analysis = analyzer.analyze(statement);
+                    assertEquals(
+                            analysis.getAccessControlReferences().getTableColumnAndSubfieldReferencesForAccessControl().values().stream().findFirst().get(),
+                            ImmutableMap.of(QualifiedObjectName.valueOf("tpch.s1.t1"), ImmutableSet.of("a", "c"),
+                                    QualifiedObjectName.valueOf("tpch.s1.t13"), ImmutableSet.of("y")));
+                });
+    }
+
     private void assertUtilizedTableColumns(@Language("SQL") String query, Map<QualifiedObjectName, Set<String>> expected)
     {
         transaction(transactionManager, accessControl)
