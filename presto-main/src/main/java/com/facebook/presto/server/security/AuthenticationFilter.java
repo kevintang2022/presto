@@ -28,16 +28,21 @@ import jakarta.inject.Inject;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.FilterConfig;
+import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
+import java.io.StringReader;
 import java.security.Principal;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -45,6 +50,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static com.facebook.presto.spi.StandardErrorCode.HEADER_MODIFICATION_ATTEMPT;
 import static com.google.common.io.ByteStreams.copy;
@@ -85,6 +91,15 @@ public class AuthenticationFilter
     {
         HttpServletRequest request = (HttpServletRequest) servletRequest;
         HttpServletResponse response = (HttpServletResponse) servletResponse;
+        String statement;
+        if ("POST".equalsIgnoreCase(request.getMethod()) && "/v1/statement".equals(request.getRequestURI())) {
+            request = new ModifiedHttpServletRequest(request, ImmutableMap.of());
+            statement = request.getReader().lines().collect(Collectors.joining(System.lineSeparator()));
+            request = new ModifiedHttpServletRequest(request, ImmutableMap.of());
+        }
+        else {
+            statement = "";
+        }
 
         // skip authentication if non-secure or not configured
         if (!doesRequestSupportAuthentication(request)) {
@@ -140,6 +155,7 @@ public class AuthenticationFilter
     }
 
     public HttpServletRequest mergeExtraHeaders(HttpServletRequest request, Principal principal)
+            throws IOException
     {
         List<ClientRequestFilter> clientRequestFilters = clientRequestFilterManager.getClientRequestFilters();
 
@@ -221,14 +237,17 @@ public class AuthenticationFilter
         }
     }
 
-    public static class ModifiedHttpServletRequest
+    public class ModifiedHttpServletRequest
             extends HttpServletRequestWrapper
     {
         private final Map<String, String> customHeaders;
+        private String cachedBody = null;
+        private HttpServletRequest cachedRequest = null;
 
         public ModifiedHttpServletRequest(HttpServletRequest request, Map<String, String> headers)
         {
             super(request);
+            cachedRequest = request;
             this.customHeaders = ImmutableMap.copyOf(requireNonNull(headers, "headers is null"));
         }
 
@@ -257,6 +276,63 @@ public class AuthenticationFilter
                 return enumeration(ImmutableList.of(customHeaders.get(name)));
             }
             return super.getHeaders(name);
+        }
+
+        @Override
+        public BufferedReader getReader()
+                throws IOException
+        {
+            if (cachedBody == null) {
+                // Read and cache the body from the original reader
+                StringBuilder sb = new StringBuilder();
+                BufferedReader originalReader = super.getReader();
+                String line;
+                while ((line = originalReader.readLine()) != null) {
+                    sb.append(line).append(System.lineSeparator());
+                }
+                cachedBody = sb.toString();
+            }
+            // Return a new reader over the cached body
+            return new BufferedReader(new StringReader(cachedBody));
+        }
+
+        @Override
+        public ServletInputStream getInputStream()
+                throws IOException
+        {
+            if (cachedBody == null) {
+                // Ensure the body is cached by calling getReader()
+                this.getReader();
+            }
+            final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(cachedBody.getBytes(getCharacterEncoding() != null ? getCharacterEncoding() : "UTF-8"));
+            return new ServletInputStream()
+            {
+                @Override
+                public int read()
+                        throws IOException
+                {
+                    return byteArrayInputStream.read();
+                }
+
+                @Override
+                public boolean isFinished()
+                {
+                    return byteArrayInputStream.available() == 0;
+                }
+
+                @Override
+                public boolean isReady()
+                {
+                    return true;
+                }
+
+                @Override
+                public void setReadListener(ReadListener readListener)
+                {
+                    // Not implementing async reading
+                    throw new UnsupportedOperationException();
+                }
+            };
         }
     }
 }
