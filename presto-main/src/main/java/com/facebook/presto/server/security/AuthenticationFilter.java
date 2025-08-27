@@ -36,13 +36,12 @@ import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jetbrains.annotations.NotNull;
 
-import java.io.BufferedReader;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
-import java.io.StringReader;
 import java.security.Principal;
 import java.util.Enumeration;
 import java.util.HashSet;
@@ -50,7 +49,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static com.facebook.presto.spi.StandardErrorCode.HEADER_MODIFICATION_ATTEMPT;
 import static com.google.common.io.ByteStreams.copy;
@@ -91,14 +89,9 @@ public class AuthenticationFilter
     {
         HttpServletRequest request = (HttpServletRequest) servletRequest;
         HttpServletResponse response = (HttpServletResponse) servletResponse;
-        String statement;
+
         if ("POST".equalsIgnoreCase(request.getMethod()) && "/v1/statement".equals(request.getRequestURI())) {
-            request = new ModifiedHttpServletRequest(request, ImmutableMap.of());
-            statement = request.getReader().lines().collect(Collectors.joining(System.lineSeparator()));
-            request = new ModifiedHttpServletRequest(request, ImmutableMap.of());
-        }
-        else {
-            statement = "";
+            request = new MultiReadHttpServletRequestWrapper(request);
         }
 
         // skip authentication if non-secure or not configured
@@ -155,7 +148,6 @@ public class AuthenticationFilter
     }
 
     public HttpServletRequest mergeExtraHeaders(HttpServletRequest request, Principal principal)
-            throws IOException
     {
         List<ClientRequestFilter> clientRequestFilters = clientRequestFilterManager.getClientRequestFilters();
 
@@ -237,17 +229,14 @@ public class AuthenticationFilter
         }
     }
 
-    public class ModifiedHttpServletRequest
+    public static class ModifiedHttpServletRequest
             extends HttpServletRequestWrapper
     {
         private final Map<String, String> customHeaders;
-        private String cachedBody = null;
-        private HttpServletRequest cachedRequest = null;
 
         public ModifiedHttpServletRequest(HttpServletRequest request, Map<String, String> headers)
         {
             super(request);
-            cachedRequest = request;
             this.customHeaders = ImmutableMap.copyOf(requireNonNull(headers, "headers is null"));
         }
 
@@ -277,47 +266,45 @@ public class AuthenticationFilter
             }
             return super.getHeaders(name);
         }
+    }
 
-        @Override
-        public BufferedReader getReader()
+    public static class MultiReadHttpServletRequestWrapper
+            extends HttpServletRequestWrapper
+    {
+        private final byte[] cachedBody;
+        private final int contentLength;
+        private final ServletInputStream inputStream;
+
+        public MultiReadHttpServletRequestWrapper(HttpServletRequest request)
                 throws IOException
         {
-            if (cachedBody == null) {
-                // Read and cache the body from the original reader
-                StringBuilder sb = new StringBuilder();
-                BufferedReader originalReader = super.getReader();
-                String line;
-                while ((line = originalReader.readLine()) != null) {
-                    sb.append(line).append(System.lineSeparator());
-                }
-                cachedBody = sb.toString();
-            }
-            // Return a new reader over the cached body
-            return new BufferedReader(new StringReader(cachedBody));
-        }
-
-        @Override
-        public ServletInputStream getInputStream()
-                throws IOException
-        {
-            if (cachedBody == null) {
-                // Ensure the body is cached by calling getReader()
-                this.getReader();
-            }
-            final ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(cachedBody.getBytes(getCharacterEncoding() != null ? getCharacterEncoding() : "UTF-8"));
-            return new ServletInputStream()
+            super(request);
+            // Cache the body
+            contentLength = request.getContentLength();
+            cachedBody = request.getInputStream().readNBytes(contentLength);
+            inputStream = new ServletInputStream()
             {
+                ByteArrayInputStream bais = new ByteArrayInputStream(cachedBody);
+
                 @Override
                 public int read()
                         throws IOException
                 {
-                    return byteArrayInputStream.read();
+                    return bais.read();
                 }
 
                 @Override
+                public int read(@NotNull byte[] b, int off, int len)
+                        throws IOException
+                {
+                    return bais.read(b, off, len);
+                }
+
+                // Implement other methods as needed
+                @Override
                 public boolean isFinished()
                 {
-                    return byteArrayInputStream.available() == 0;
+                    return bais.available() == 0;
                 }
 
                 @Override
@@ -329,10 +316,39 @@ public class AuthenticationFilter
                 @Override
                 public void setReadListener(ReadListener readListener)
                 {
-                    // Not implementing async reading
-                    throw new UnsupportedOperationException();
+                    // Not implemented for this simple example
+                }
+
+                @Override
+                public int available()
+                        throws IOException
+                {
+                    return bais.available();
                 }
             };
+        }
+
+        public byte[] getCachedBody()
+        {
+            return cachedBody;
+        }
+
+        @Override
+        public ServletInputStream getInputStream()
+        {
+            return inputStream;
+        }
+
+        @Override
+        public int getContentLength()
+        {
+            return contentLength;
+        }
+
+        @Override
+        public long getContentLengthLong()
+        {
+            return contentLength;
         }
     }
 }
