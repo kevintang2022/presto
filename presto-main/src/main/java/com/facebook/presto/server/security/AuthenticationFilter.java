@@ -28,13 +28,17 @@ import jakarta.inject.Inject;
 import jakarta.servlet.Filter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.FilterConfig;
+import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jetbrains.annotations.NotNull;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintWriter;
@@ -85,6 +89,10 @@ public class AuthenticationFilter
     {
         HttpServletRequest request = (HttpServletRequest) servletRequest;
         HttpServletResponse response = (HttpServletResponse) servletResponse;
+
+        if ("POST".equalsIgnoreCase(request.getMethod()) && "/v1/statement".equals(request.getRequestURI())) {
+            request = new MultiReadHttpServletRequestWrapper(request);
+        }
 
         // skip authentication if non-secure or not configured
         if (!doesRequestSupportAuthentication(request)) {
@@ -257,6 +265,90 @@ public class AuthenticationFilter
                 return enumeration(ImmutableList.of(customHeaders.get(name)));
             }
             return super.getHeaders(name);
+        }
+    }
+
+    public static class MultiReadHttpServletRequestWrapper
+            extends HttpServletRequestWrapper
+    {
+        private final byte[] cachedBody;
+        private final int contentLength;
+        private final ServletInputStream inputStream;
+
+        public MultiReadHttpServletRequestWrapper(HttpServletRequest request)
+                throws IOException
+        {
+            super(request);
+            // Cache the body
+            contentLength = request.getContentLength();
+            cachedBody = request.getInputStream().readNBytes(contentLength);
+            inputStream = new ServletInputStream()
+            {
+                ByteArrayInputStream bais = new ByteArrayInputStream(cachedBody);
+
+                @Override
+                public int read()
+                        throws IOException
+                {
+                    return bais.read();
+                }
+
+                @Override
+                public int read(@NotNull byte[] b, int off, int len)
+                        throws IOException
+                {
+                    return bais.read(b, off, len);
+                }
+
+                // Implement other methods as needed
+                @Override
+                public boolean isFinished()
+                {
+                    return bais.available() == 0;
+                }
+
+                @Override
+                public boolean isReady()
+                {
+                    return true;
+                }
+
+                @Override
+                public void setReadListener(ReadListener readListener)
+                {
+                    // Not implemented for this simple example
+                }
+
+                @Override
+                public int available()
+                        throws IOException
+                {
+                    return bais.available();
+                }
+            };
+        }
+
+        public byte[] getCachedBody()
+        {
+            return cachedBody;
+        }
+
+        @Override
+        public ServletInputStream getInputStream()
+        {
+            return inputStream;
+        }
+
+        @Override
+        public int getContentLength()
+        {
+            return contentLength;
+        }
+
+        @Override
+        public long getContentLengthLong()
+        {
+            return contentLength;
         }
     }
 }

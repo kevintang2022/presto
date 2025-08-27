@@ -21,6 +21,8 @@ import com.facebook.airlift.discovery.client.ServiceAnnouncement;
 import com.facebook.airlift.discovery.client.ServiceSelectorManager;
 import com.facebook.airlift.discovery.client.testing.TestingDiscoveryModule;
 import com.facebook.airlift.event.client.EventModule;
+import com.facebook.airlift.http.server.HttpServer;
+import com.facebook.airlift.http.server.HttpServerInfo;
 import com.facebook.airlift.http.server.TheServlet;
 import com.facebook.airlift.http.server.testing.TestingHttpServer;
 import com.facebook.airlift.http.server.testing.TestingHttpServerModule;
@@ -58,6 +60,7 @@ import com.facebook.presto.nodeManager.PluginNodeManager;
 import com.facebook.presto.resourcemanager.ResourceManagerClusterStateProvider;
 import com.facebook.presto.security.AccessControlManager;
 import com.facebook.presto.server.GracefulShutdownHandler;
+import com.facebook.presto.server.HttpServerModule;
 import com.facebook.presto.server.PluginManager;
 import com.facebook.presto.server.ServerInfoResource;
 import com.facebook.presto.server.ServerMainModule;
@@ -133,7 +136,6 @@ import static com.google.common.base.Throwables.throwIfUnchecked;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static com.google.inject.multibindings.Multibinder.newSetBinder;
-import static java.lang.Integer.parseInt;
 import static java.nio.file.Files.createTempDirectory;
 import static java.nio.file.Files.isDirectory;
 import static java.util.Objects.requireNonNull;
@@ -149,6 +151,8 @@ public class TestingPrestoServer
     private final PluginManager pluginManager;
     private final ConnectorManager connectorManager;
     private final TestingHttpServer server;
+    private final HttpServer coordServer;
+    private final HttpServerInfo serverInfo;
     private final CatalogManager catalogManager;
     private final TransactionManager transactionManager;
     private final SqlParser sqlParser;
@@ -299,7 +303,6 @@ public class TestingPrestoServer
 
         ImmutableList.Builder<Module> modules = ImmutableList.<Module>builder()
                 .add(new TestingNodeModule(Optional.ofNullable(environment)))
-                .add(new TestingHttpServerModule(parseInt(coordinator ? coordinatorPort : "0")))
                 .add(new JsonModule())
                 .add(installModuleIf(
                         FeaturesConfig.class,
@@ -334,6 +337,12 @@ public class TestingPrestoServer
                     newSetBinder(binder, Filter.class, TheServlet.class).addBinding()
                             .to(RequestBlocker.class).in(Scopes.SINGLETON);
                 });
+        if (coordinator) {
+            modules.add(new HttpServerModule());
+        }
+        else {
+            modules.add(new TestingHttpServerModule(0));
+        }
 
         if (discoveryUri != null) {
             requireNonNull(environment, "environment required when discoveryUri is present");
@@ -367,7 +376,17 @@ public class TestingPrestoServer
 
         connectorManager = injector.getInstance(ConnectorManager.class);
 
-        server = injector.getInstance(TestingHttpServer.class);
+        if (coordinator) {
+            coordServer = injector.getInstance(HttpServer.class);
+            server = null;
+            serverInfo = injector.getInstance(HttpServerInfo.class);
+        }
+        else {
+            coordServer = null;
+            server = injector.getInstance(TestingHttpServer.class);
+            serverInfo = null;
+        }
+
         catalogManager = injector.getInstance(CatalogManager.class);
         transactionManager = injector.getInstance(TransactionManager.class);
         sqlParser = injector.getInstance(SqlParser.class);
@@ -582,12 +601,22 @@ public class TestingPrestoServer
 
     public URI getBaseUrl()
     {
-        return server.getBaseUrl();
+        if (coordinator) {
+            return serverInfo.getHttpUri();
+        }
+        else {
+            return server.getBaseUrl();
+        }
     }
 
     public URI resolve(String path)
     {
-        return server.getBaseUrl().resolve(path);
+        if (coordinator) {
+            return serverInfo.getHttpUri().resolve(path);
+        }
+        else {
+            return server.getBaseUrl().resolve(path);
+        }
     }
 
     public HostAndPort getAddress()
@@ -597,7 +626,15 @@ public class TestingPrestoServer
 
     public HostAndPort getHttpsAddress()
     {
-        URI httpsUri = server.getHttpServerInfo().getHttpsUri();
+
+        URI httpsUri;
+        if (coordinator) {
+            httpsUri = serverInfo.getHttpsUri();
+        }
+        else {
+            httpsUri = server.getHttpServerInfo().getHttpsUri();
+        }
+
         return HostAndPort.fromParts(httpsUri.getHost(), httpsUri.getPort());
     }
 
