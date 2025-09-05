@@ -11,12 +11,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package com.facebook.presto.operator.aggregation.state;
+package com.facebook.presto.scalar.sql;
 
-public interface RegressionState
-        extends CovarianceState
+import com.facebook.presto.spi.Plugin;
+import com.google.common.collect.ImmutableSet;
+
+import java.util.Set;
+
+public class NativeSqlInvokedFunctionsPlugin
+        implements Plugin
 {
-    double getM2X();
-
-    void setM2X(double value);
+    @Override
+    public Set<Class<?>> getSqlInvokedFunctions()
+    {
+        return ImmutableSet.<Class<?>>builder()
+                .add(NativeArraySqlFunctions.class)
+                .add(NativeMapSqlFunctions.class)
+                .add(NativeSimpleSamplingPercent.class)
+                .build();
+    }
 }
