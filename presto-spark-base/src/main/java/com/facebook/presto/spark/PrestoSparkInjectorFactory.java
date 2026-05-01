@@ -17,10 +17,12 @@ import com.facebook.airlift.bootstrap.Bootstrap;
 import com.facebook.airlift.json.JsonModule;
 import com.facebook.airlift.json.smile.SmileModule;
 import com.facebook.airlift.node.NodeInfo;
+import com.facebook.presto.builtin.tools.WorkerFunctionRegistryTool;
 import com.facebook.presto.eventlistener.EventListenerManager;
 import com.facebook.presto.eventlistener.EventListenerModule;
 import com.facebook.presto.execution.resourceGroups.ResourceGroupManager;
 import com.facebook.presto.execution.warnings.WarningCollectorModule;
+import com.facebook.presto.metadata.FunctionAndTypeManager;
 import com.facebook.presto.metadata.StaticCatalogStore;
 import com.facebook.presto.metadata.StaticFunctionNamespaceStore;
 import com.facebook.presto.security.AccessControlManager;
@@ -31,6 +33,7 @@ import com.facebook.presto.server.security.PasswordAuthenticatorManager;
 import com.facebook.presto.server.security.PrestoAuthenticatorManager;
 import com.facebook.presto.spark.classloader_interface.PrestoSparkBootstrapTimer;
 import com.facebook.presto.spark.classloader_interface.SparkProcessType;
+import com.facebook.presto.spi.function.SqlFunction;
 import com.facebook.presto.spi.security.AccessControl;
 import com.facebook.presto.sql.analyzer.FeaturesConfig;
 import com.facebook.presto.sql.parser.SqlParserOptions;
@@ -229,6 +232,14 @@ public class PrestoSparkInjectorFactory
                     injector.getInstance(StaticFunctionNamespaceStore.class)
                             .loadFunctionNamespaceManagers(defaultAuthClientConfigs(nodeInfo.getNodeId()));
                 }
+            }
+            // Mirror of PrestoServer.java:201-204: if built-in sidecar function registration is
+            // enabled, fetch the metadata from a driver-local sidecar (or whatever
+            // WorkerFunctionRegistryTool implementation is bound) and register the result into
+            // FunctionAndTypeManager as built-ins so they're resolvable from unqualified SQL.
+            if (sparkProcessType.equals(DRIVER) && featuresConfig.isBuiltInSidecarFunctionsEnabled()) {
+                List<? extends SqlFunction> functions = injector.getInstance(WorkerFunctionRegistryTool.class).getWorkerFunctions();
+                injector.getInstance(FunctionAndTypeManager.class).registerWorkerFunctions(functions);
             }
             bootstrapTimer.endDriverModulesLoading();
         }
