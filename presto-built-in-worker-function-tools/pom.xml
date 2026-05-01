@@ -12,7 +12,13 @@
 
     <properties>
         <air.main.basedir>${project.parent.basedir}</air.main.basedir>
-        <project.build.targetJdk>17</project.build.targetJdk>
+        <!-- Sapphire (Presto-on-Spark) runs on Java 8/11 executors and loads this
+             module's classes via the driver classloader. Targeting Java 8 bytecode
+             keeps this module callable from both Prestissimo (Java 17) and Sapphire
+             (Java 8/11). Sibling modules `presto-spi`, `presto-common`, and
+             `presto-function-namespace-managers-common` all target Java 8 for the
+             same reason. -->
+        <project.build.targetJdk>8</project.build.targetJdk>
         <air.check.skip-modernizer>true</air.check.skip-modernizer>
     </properties>
 
